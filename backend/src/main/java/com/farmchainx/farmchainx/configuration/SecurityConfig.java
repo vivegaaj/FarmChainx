@@ -1,19 +1,22 @@
 package com.farmchainx.farmchainx.configuration;
 
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-
 import com.farmchainx.farmchainx.jwt.JwtAuthenticationFilter;
 
 @Configuration
+@EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthFilter;
@@ -35,20 +38,54 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            // Disable CSRF because we use JWT, not cookies
             .csrf(csrf -> csrf.disable())
-
-            // Define access rules
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()          // allow register/login
-                .requestMatchers("/api/products/**").hasAuthority("ROLE_FARMER") // only farmers can access
-                .anyRequest().authenticated()                         // everything else requires JWT
-            )
-
-            // No sessions; JWT is stateless
             .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((req, res, authEx) -> {
+                    res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    res.setContentType("application/json");
+                    res.getWriter().write("{\"error\": \"Unauthorized - Please log in\"}");
+                })
+                .accessDeniedHandler((req, res, accessEx) -> {
+                    res.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                    res.setContentType("application/json");
+                    res.getWriter().write("{\"error\": \"Forbidden - Insufficient permissions\"}");
+                })
+            )
+            .authorizeHttpRequests(auth -> auth
+                // Public routes
+                .requestMatchers("/api/auth/**").permitAll()
+                .requestMatchers("/error", "/actuator/**").permitAll()
+                .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
+                .requestMatchers("/uploads/**").permitAll()
+                .requestMatchers("/api/verify/**").permitAll()
 
-            // Add our JWT filter before Spring’s default login filter
+                // Product-related public GETs
+                .requestMatchers("/api/products/*/qrcode/download").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/products/by-uuid/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/products/{id}/public").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/products/*/feedbacks").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/products/*/feedback").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/products/*/feedback").hasRole("CONSUMER")
+                .requestMatchers(HttpMethod.GET, "/api/products", "/api/products/**").permitAll()
+
+                // Product management
+                .requestMatchers("/api/products/upload").hasAnyRole("FARMER", "ADMIN")
+                .requestMatchers("/api/products/**").hasAnyRole("FARMER", "DISTRIBUTOR", "RETAILER", "ADMIN")
+
+                // Supply chain tracking
+                .requestMatchers("/api/track/**").hasAnyRole("DISTRIBUTOR", "RETAILER", "ADMIN", "FARMER")
+
+                // ✅ Allow consumers/farmers/retailers to request admin access
+                .requestMatchers(HttpMethod.POST, "/api/admin/request-admin")
+                    .hasAnyRole("CONSUMER", "FARMER", "RETAILER", "ADMIN")
+
+                // All other admin endpoints restricted to ADMIN
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+
+                // Any other route must be authenticated
+                .anyRequest().authenticated()
+            )
             .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();

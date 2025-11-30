@@ -1,7 +1,9 @@
 package com.farmchainx.farmchainx.service;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.farmchainx.farmchainx.dto.AuthResponse;
 import com.farmchainx.farmchainx.dto.LoginRequest;
@@ -34,51 +36,66 @@ public class AuthService {
         this.jwtUtil = jwtUtil;
     }
 
-    public String register(RegisterRequest request) {
-        try {
-            if (userRepository.findByEmail(request.getEmail()).isPresent()) {
-                return "⚠️ Email already exists!";
-            }
+    public AuthResponse register(RegisterRequest request) {
 
-            String roleInput = request.getRole().toUpperCase();
-
-            if (roleInput.equals("ADMIN") || roleInput.equals("ROLE_ADMIN")) {
-                return "🚫 Cannot register as Admin!";
-            }
-
-            String chosenRole = roleInput.startsWith("ROLE_") ? roleInput : "ROLE_" + roleInput;
-
-            Role userRole = roleRepository.findByRoleName(chosenRole)
-                    .orElseThrow(() -> new RuntimeException("Role not found: " + chosenRole));
-
-            User user = new User();
-            user.setName(request.getName());
-            user.setEmail(request.getEmail());
-            user.setPassword(passwordEncoder.encode(request.getPassword()));
-            user.setRoles(Set.of(userRole));
-
-            userRepository.save(user);
-
-            return "✅ User registered successfully as " + chosenRole + "!";
-
-        } catch (RuntimeException e) {
-            e.printStackTrace();
-            return "❌ Registration failed: " + e.getMessage();
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already exists!");
         }
+
+        String roleInput = request.getRole().trim().toUpperCase();
+
+        if (!Set.of("CONSUMER", "FARMER", "DISTRIBUTOR", "RETAILER")
+                .contains(roleInput)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Only Consumer, Farmer, Distributor, Retailer allowed");
+        }
+
+        Role role = roleRepository.findByName("ROLE_" + roleInput)
+                .orElseThrow(() -> new RuntimeException("Role not found in DB"));
+
+        User user = new User();
+        user.setName(request.getName());
+        user.setEmail(request.getEmail());
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
+       // User savedUser = userRepository.save(user);
+       // savedUser.getRoles().add(role);
+        //userRepository.save(savedUser);
+        //return new AuthResponse(null, role.getName(), request.getEmail());
+        user.setRoles(Set.of(role));
+         userRepository.save(user);
+
+        return new AuthResponse(null, role.getName(), request.getEmail());
     }
 
+
+
+
     public AuthResponse login(LoginRequest login) {
+
         User user = userRepository.findByEmail(login.getEmail())
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
         if (!passwordEncoder.matches(login.getPassword(), user.getPassword())) {
-            throw new RuntimeException("Invalid password");
+            throw new RuntimeException("Invalid password!");
         }
 
-        String role = user.getRoles().iterator().next().getRoleName();
+        // ✅ Check if user has admin role
+        boolean isAdmin = user.getRoles()
+                .stream()
+                .anyMatch(r -> r.getName().equals("ROLE_ADMIN"));
 
-        String token = jwtUtil.generateToken(user.getEmail(), role, user.getId());
+        // ✅ Primary role: ADMIN if present, else first assigned role
+        String primaryRole = isAdmin
+                ? "ROLE_ADMIN"
+                : user.getRoles()
+                    .stream()
+                    .map(Role::getName)
+                    .findFirst()
+                    .orElse("ROLE_CONSUMER");
 
-        return new AuthResponse(token, role, user.getEmail());
+        // ✅ Generate token
+        String token = jwtUtil.generateToken(user.getEmail(), primaryRole, user.getId());
+
+        return new AuthResponse(token, primaryRole, user.getEmail());
     }
 }
