@@ -5,9 +5,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
 public class FarmChainXProjectApplication {
-
-	public static void main(String[] args) {
-		SpringApplication.run(FarmChainXProjectApplication.class, args);
-	}
-
+    public static void main(String[] args) {
+        SpringApplication.run(FarmChainXProjectApplication.class, args);
+    }
 }
